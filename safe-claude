@@ -1,0 +1,509 @@
+#!/bin/bash
+
+# Version
+VERSION="1.0.0"
+
+# Get the current directory name and full path
+CURRENT_DIR=$(pwd)
+DIR_NAME=$(basename "$CURRENT_DIR")
+BASE_IMAGE_NAME="claude"
+READY_IMAGE_NAME="claude:ready"
+
+# Function to show help
+show_help() {
+  cat << EOF
+Safe Claude - Run Claude Code in a secure Docker container with multi-project support
+
+Usage: $0 [OPTION]
+
+Options:
+  -h, --help         Show this help message
+  --save             Save current container's ready state to global ready image
+  --rm              Remove current project container only
+  --rm --all        Remove ALL project containers and images
+
+Examples:
+  $0                 Run Claude Code (project-specific container)
+  $0 --rm            Remove current project container only
+  $0 --rm --all      Remove all project containers and images
+  $0 --save          Save configuration to ready image
+
+Container Naming:
+  Project containers: claude-dev-${DIR_NAME}
+  Authentication shared across all project containers via global images
+EOF
+}
+
+# Parse command line arguments
+SAVE_LOGIN=false
+REMOVE_ALL=false
+REMOVE_GLOBAL=false
+SHOW_HELP=false
+SHOW_VERSION=false
+
+case "$1" in
+  -h|--help)
+    SHOW_HELP=true
+    ;;
+  -v|--version)
+    SHOW_VERSION=true
+    ;;
+  --save)
+    SAVE_LOGIN=true
+    shift
+    ;;
+  --rm)
+    REMOVE_ALL=true
+    if [[ "$2" == "--all" ]]; then
+      REMOVE_GLOBAL=true
+      shift
+    fi
+    shift
+    ;;
+esac
+
+# Function to save .claude.json from container
+save_claude_json() {
+  local container_name="$1"
+  local save_dir="$HOME/.claude/container-configs"
+
+  # Create directory if it doesn't exist
+  mkdir -p "$save_dir"
+
+  # Check if container exists and has .claude.json
+  if docker ps -aq --filter "name=$container_name" | grep -q .; then
+    echo "Saving .claude.json from $container_name..."
+
+    # Copy .claude.json from container to host
+    docker cp "$container_name:/home/node/.claude.json" "$save_dir/.claude.json.$container_name" 2>/dev/null
+
+    if [ $? -eq 0 ]; then
+      echo "Saved authentication config to $save_dir/.claude.json.$container_name"
+    else
+      echo "No .claude.json found in container (container may not be configured yet)"
+    fi
+  fi
+}
+
+# Function to restore .claude.json to container
+restore_claude_json() {
+  local container_name="$1"
+  local save_dir="$HOME/.claude/container-configs"
+  local config_file="$save_dir/.claude.json.$container_name"
+
+  # Check if saved config exists
+  if [ -f "$config_file" ]; then
+    echo "Restoring saved authentication for $container_name..."
+
+    # Copy .claude.json from host to container
+    docker cp "$config_file" "$container_name:/home/node/.claude.json" 2>/dev/null
+
+    if [ $? -eq 0 ]; then
+      # Fix permissions
+      docker exec "$container_name" chown node:node /home/node/.claude.json
+      echo "Authentication restored from previous session"
+    else
+      echo "Failed to restore authentication"
+    fi
+  elif [ "$IMAGE_NAME" = "$READY_IMAGE_NAME" ]; then
+    # If using ready image but no project-specific config, try global one
+    local global_config="$save_dir/.claude.json.global"
+    if [ -f "$global_config" ]; then
+      echo "Restoring global authentication..."
+      docker cp "$global_config" "$container_name:/home/node/.claude.json" 2>/dev/null
+      docker exec "$container_name" chown node:node /home/node/.claude.json 2>/dev/null
+    fi
+  fi
+}
+
+# Function to commit ready state
+commit_ready_state() {
+  # Look for any running Claude containers
+  local running_containers=$(docker ps -q --filter "name=claude-dev-")
+  if [ -z "$running_containers" ]; then
+    running_containers=$(docker ps -q --filter "ancestor=$BASE_IMAGE_NAME")
+    if [ -z "$running_containers" ]; then
+      echo "No running Claude containers found to commit."
+      exit 1
+    fi
+  fi
+  
+  local container_id=$(echo "$running_containers" | head -n1)
+  echo "Committing ready state from container $container_id..."
+
+  # Also save .claude.json to global config
+  local save_dir="$HOME/.claude/container-configs"
+  mkdir -p "$save_dir"
+  docker cp "$container_id:/home/node/.claude.json" "$save_dir/.claude.json.global" 2>/dev/null
+
+  docker commit "$container_id" "$READY_IMAGE_NAME"
+  echo "Ready state saved to image: $READY_IMAGE_NAME"
+  echo "Stopping and removing old container..."
+  docker stop "$container_id"
+  docker rm "$container_id"
+  echo "Done! Next run will use the ready state automatically."
+}
+
+# Function to check for running containers and offer commit
+check_and_offer_commit() {
+  # Check for any Claude containers and running containers by ancestor
+  local claude_containers=$(docker ps -q --filter "name=claude-dev-")
+  local running_containers=$(docker ps -q --filter "ancestor=$BASE_IMAGE_NAME")
+  
+  if ([ -n "$claude_containers" ] || [ -n "$running_containers" ]) && ! docker image inspect "$READY_IMAGE_NAME" >/dev/null 2>&1; then
+    echo "Found running Claude container(s) from base image."
+    echo "You don't have a ready image yet. Would you like to:"
+    echo "1) Stop and commit current container to save ready state"
+    echo "2) Continue with unconfigured container"
+    echo "3) Exit"
+    read -p "Choose (1/2/3): " choice
+
+    case $choice in
+      1)
+        echo "Committing ready state..."
+        commit_ready_state
+        echo "Now starting Claude with your saved ready state..."
+        ;;
+      2)
+        echo "Continuing with unconfigured container..."
+        ;;
+      3)
+        echo "Exiting..."
+        exit 0
+        ;;
+      *)
+        echo "Invalid choice. Continuing with unconfigured container..."
+        ;;
+    esac
+  fi
+}
+
+
+# Function to remove Claude containers and images
+remove_all() {
+  if [ "$REMOVE_GLOBAL" = true ]; then
+    echo "Removing ALL Claude containers and images..."
+    
+    # Stop and remove all claude-dev containers (all projects)
+    echo "Stopping all Claude containers..."
+    docker ps -q --filter "name=claude-dev-" | xargs -r docker stop
+    docker ps -aq --filter "name=claude-dev-" | xargs -r docker rm
+    
+    # Also clean up any containers using Claude images directly
+    local claude_containers=$(docker ps -aq --filter "ancestor=$BASE_IMAGE_NAME" --filter "ancestor=$READY_IMAGE_NAME")
+    if [ -n "$claude_containers" ]; then
+      echo "Cleaning up additional Claude containers..."
+      echo "$claude_containers" | xargs -r docker stop
+      echo "$claude_containers" | xargs -r docker rm
+    fi
+
+    # Remove images
+    echo "Removing images..."
+    docker image inspect "$READY_IMAGE_NAME" >/dev/null 2>&1 && docker rmi "$READY_IMAGE_NAME"
+    docker image inspect "$BASE_IMAGE_NAME" >/dev/null 2>&1 && docker rmi "$BASE_IMAGE_NAME"
+    
+    echo "Global cleanup complete! All projects will rebuild fresh on next run."
+  else
+    echo "Removing current project container: $CONTAINER_NAME"
+
+    # Save .claude.json before removal
+    save_claude_json "$CONTAINER_NAME"
+
+    # Stop and remove only current project container
+    if docker ps -q --filter "name=$CONTAINER_NAME" >/dev/null 2>&1; then
+      echo "Stopping container..."
+      docker stop "$CONTAINER_NAME"
+    fi
+    if docker ps -aq --filter "name=$CONTAINER_NAME" >/dev/null 2>&1; then
+      echo "Removing container..."
+      docker rm "$CONTAINER_NAME"
+    fi
+
+    echo "Project container removed. Images preserved for next run."
+  fi
+}
+
+# Handle version command
+if [ "$SHOW_VERSION" = true ]; then
+  echo "safe-claude version $VERSION"
+  exit 0
+fi
+
+# Handle help command
+if [ "$SHOW_HELP" = true ]; then
+  show_help
+  exit 0
+fi
+
+# Handle remove all command
+if [ "$REMOVE_ALL" = true ]; then
+  remove_all
+  exit 0
+fi
+
+# Handle save ready state command
+if [ "$SAVE_LOGIN" = true ]; then
+  commit_ready_state
+  exit 0
+fi
+
+# Check for running containers and offer to commit
+check_and_offer_commit
+
+# Function to determine which image to use
+get_image_name() {
+  # Check if ready image exists and use it, otherwise use base image
+  if docker image inspect "$READY_IMAGE_NAME" >/dev/null 2>&1; then
+    echo "$READY_IMAGE_NAME"
+  else
+    echo "$BASE_IMAGE_NAME"
+  fi
+}
+
+# Function to build the base image if it doesn't exist
+build_base_image_if_needed() {
+  if ! docker image inspect "$BASE_IMAGE_NAME" >/dev/null 2>&1; then
+    echo "Building Claude Code development image..."
+
+    # Create build directory in current project folder
+    local build_dir="$CURRENT_DIR/.docker-build"
+    mkdir -p "$build_dir"
+
+    # Create Dockerfile in build directory
+    cat > "$build_dir/Dockerfile" << 'DOCKERFILE'
+FROM node:20
+
+ARG TZ
+ENV TZ="$TZ"
+
+ARG CLAUDE_CODE_VERSION=latest
+
+# Setup locales first
+RUN apt-get update && apt-get install -y locales && \
+    locale-gen en_US.UTF-8
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
+
+# Install basic development tools and iptables/ipset
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  less \
+  git \
+  procps \
+  sudo \
+  fzf \
+  zsh \
+  man-db \
+  unzip \
+  gnupg2 \
+  gh \
+  iptables \
+  ipset \
+  iproute2 \
+  dnsutils \
+  aggregate \
+  jq \
+  nano \
+  vim \
+  fd-find \
+  tmux \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Create fd symlink (Ubuntu packages it as fd-find)
+RUN ln -s /usr/bin/fdfind /usr/local/bin/fd
+
+# Create npm global directory and set permissions
+RUN mkdir -p /usr/local/share/npm-global && \
+  chown -R node:node /usr/local/share/npm-global && \
+  chmod -R 755 /usr/local/share/npm-global
+
+ARG USERNAME=node
+
+# Persist bash history.
+RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
+  && mkdir /commandhistory \
+  && touch /commandhistory/.bash_history \
+  && chown -R $USERNAME /commandhistory
+
+# Set `DEVCONTAINER` environment variable to help with orientation
+ENV DEVCONTAINER=true
+
+# Create workspace and config directories and set permissions
+RUN mkdir -p /workspace /home/node/.claude && \
+  chown -R node:node /workspace /home/node/.claude
+
+WORKDIR /workspace
+
+ARG GIT_DELTA_VERSION=0.18.2
+RUN ARCH=$(dpkg --print-architecture) && \
+  wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
+  dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
+  rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
+
+# Set up non-root user with sudo access
+RUN echo "node ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+USER node
+
+# Install global packages
+ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
+ENV PATH=$PATH:/usr/local/share/npm-global/bin
+
+# Set the default shell to zsh rather than sh
+ENV SHELL=/bin/zsh
+
+# Set the default editor and visual
+ENV EDITOR=nano
+ENV VISUAL=nano
+
+# Default powerline10k theme
+ARG ZSH_IN_DOCKER_VERSION=1.2.0
+RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/v${ZSH_IN_DOCKER_VERSION}/zsh-in-docker.sh)" -- \
+  -p git \
+  -p fzf \
+  -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
+  -a "source /usr/share/doc/fzf/examples/completion.zsh" \
+  -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
+  -x
+
+# Add Claude aliases, npm alias, and ~/scripts to PATH  
+RUN echo 'alias c="claude --dangerously-skip-permissions"' >> /home/node/.zshrc && \
+    echo 'alias claude="claude --dangerously-skip-permissions"' >> /home/node/.zshrc && \
+    echo 'alias nrd="npm run build"' >> /home/node/.zshrc && \
+    echo 'export PATH="$PATH:/home/node/scripts"' >> /home/node/.zshrc && \
+    echo 'source ~/.zshrc' >> /home/node/.profile
+
+# Install Claude, ast-grep, and ccusage
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @ast-grep/cli ccusage
+
+DOCKERFILE
+    
+    # Conditionally add tmux-riffic installation if package exists
+    if [ -f "$build_dir/tf-1.0.0.tgz" ]; then
+      cat >> "$build_dir/Dockerfile" << 'TMUX_RIFFIC'
+
+# Copy and install tmux-riffic package
+COPY tf-1.0.0.tgz /tmp/tf-1.0.0.tgz
+RUN npm install -g /tmp/tf-1.0.0.tgz
+TMUX_RIFFIC
+    fi
+    
+    # Build image from directory context
+    docker build -t "$BASE_IMAGE_NAME" "$build_dir"
+    local build_result=$?
+
+    # Clean up (comment out to keep build artifacts for debugging)
+    # rm -rf "$build_dir"
+    echo "Build artifacts saved in: $build_dir"
+    
+    if [ $build_result -ne 0 ]; then
+      echo "Error: Failed to build image"
+      exit 1
+    fi
+  fi
+}
+
+# Build base image if needed
+build_base_image_if_needed
+
+# Get the appropriate image name
+IMAGE_NAME=$(get_image_name)
+
+# Determine if we should use interactive mode
+TTY_FLAG=""
+if [ -t 0 ] && [ -t 1 ]; then
+  TTY_FLAG="-it"
+else
+  TTY_FLAG="-i"
+fi
+
+# Build volume mounts - share specific .claude subdirectories but not .claude.json
+VOLUMES="-v $CURRENT_DIR:/workspace/$DIR_NAME"
+
+# Mount specific .claude subdirectories if they exist (excluding CLAUDE.md and settings.json)
+if [ -d "$HOME/.claude/commands" ]; then
+  VOLUMES="$VOLUMES -v $HOME/.claude/commands:/home/node/.claude/commands"
+fi
+if [ -d "$HOME/.claude/agents" ]; then
+  VOLUMES="$VOLUMES -v $HOME/.claude/agents:/home/node/.claude/agents"
+fi
+
+# Mount ~/ai/scripts to /home/node/scripts if it exists
+if [ -d "$HOME/ai/scripts" ]; then
+  VOLUMES="$VOLUMES -v $HOME/ai/scripts:/home/node/scripts"
+fi
+
+
+# Check for API key in environment
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+  ENV_VARS="$ENV_VARS -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+fi
+
+# Preserve host terminal settings for better color support
+ENV_VARS="$ENV_VARS -e TERM=${TERM:-xterm-256color} -e COLORTERM=${COLORTERM:-truecolor}"
+
+
+# Check if project-specific container already exists (running or stopped)
+CONTAINER_NAME="claude-dev-${DIR_NAME}"
+EXISTING_CONTAINER=$(docker ps -aq --filter "name=${CONTAINER_NAME}")
+
+# If container exists but is stopped, start it
+if [ -n "$EXISTING_CONTAINER" ]; then
+  CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' "$EXISTING_CONTAINER")
+  if [ "$CONTAINER_STATUS" != "running" ]; then
+    echo "Starting existing Claude container: $EXISTING_CONTAINER"
+    docker start "$EXISTING_CONTAINER"
+  fi
+fi
+
+# Check if container is now running
+EXISTING_CONTAINER=$(docker ps -q --filter "name=${CONTAINER_NAME}")
+
+if [ -n "$EXISTING_CONTAINER" ]; then
+  echo "Connecting to existing Claude container: $CONTAINER_NAME"
+  echo "📦 Reminder: tmux-riffic package was installed during image build"
+  docker exec $TTY_FLAG "$EXISTING_CONTAINER" /bin/zsh -l
+else
+  echo "Starting new Claude container..."
+
+  # Only use --restart unless-stopped for ready image
+  RESTART_FLAG=""
+  if [ "$IMAGE_NAME" = "$READY_IMAGE_NAME" ]; then
+    RESTART_FLAG="--restart unless-stopped"
+  fi
+  
+  CONTAINER_ID=$(docker run -d \
+      --memory-swap=-1 \
+      $RESTART_FLAG \
+    --name "$CONTAINER_NAME" \
+    --hostname "$CONTAINER_NAME" \
+    --network host \
+    $VOLUMES \
+    $ENV_VARS \
+    -w "/workspace/$DIR_NAME" \
+    "$IMAGE_NAME" \
+    /bin/zsh -c "
+      # Ensure aliases are available (may be missing in committed images)
+      grep -q 'alias c=' ~/.zshrc || echo 'alias c=\"claude --dangerously-skip-permissions\"' >> ~/.zshrc
+      grep -q 'alias claude=' ~/.zshrc || echo 'alias claude=\"claude --dangerously-skip-permissions\"' >> ~/.zshrc
+      
+      # Ensure ~/scripts in PATH
+      grep -q '/home/node/scripts' ~/.zshrc || echo 'export PATH=\"\$PATH:/home/node/scripts\"' >> ~/.zshrc
+      
+      # Ensure fzf key bindings are loaded (may be missing in committed images)
+      grep -q 'key-bindings.zsh' ~/.zshrc || echo 'source /usr/share/doc/fzf/examples/key-bindings.zsh' >> ~/.zshrc
+      grep -q 'completion.zsh' ~/.zshrc || echo 'source /usr/share/doc/fzf/examples/completion.zsh' >> ~/.zshrc
+      
+      # Ensure history settings
+      grep -q 'HISTFILE' ~/.zshrc || echo 'export HISTFILE=/commandhistory/.bash_history' >> ~/.zshrc
+      
+    ")
+  
+  echo "Container started: $CONTAINER_NAME"
+
+  # Restore .claude.json if available
+  restore_claude_json "$CONTAINER_NAME"
+
+  echo "Connecting to container..."
+  docker exec $TTY_FLAG "$CONTAINER_ID" /bin/zsh -l
+fi

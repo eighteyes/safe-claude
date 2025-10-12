@@ -1,0 +1,41 @@
+{
+  "name": "safe-claude",
+  "version": "1.0.0",
+  "description": "Run Claude Code in secure Docker containers with multi-project support",
+  "bin": {
+    "safe-claude": "./bin/safe-claude.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "docker",
+    "container",
+    "security",
+    "isolation",
+    "anthropic",
+    "ai",
+    "development"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/safe-claude.git"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "files": [
+    "bin/",
+    "scripts/",
+    "safe-claude",
+    "README.md"
+  ]
+}
