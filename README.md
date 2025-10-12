@@ -2,6 +2,9 @@
 
 Run Claude Code in secure, isolated Docker containers with multi-project support.
 
+### 🏠 Utilize Local Agents and Commands
+- Copies your `~/.claude/{agents, commands}` for use in every project.
+
 ### 🔒 Security & Isolation
 - Each project runs in its own isolated Docker container
 
@@ -11,7 +14,7 @@ Run Claude Code in secure, isolated Docker containers with multi-project support
 
 ### 🛠️ Pre-installed Tools
 - **Search & Navigation**: ripgrep (rg), fd, fzf, ast-grep
-- **Data Processing**: jq (JSON), aggregate
+- **Data Processing**: jq (JSON), yq (YAML)
 - **Development**: git, gh (GitHub CLI), tmux, vim, nano
 - **Shell**: zsh with oh-my-zsh, powerline10k theme
 - **ccusage**: Track your Claude Code use
@@ -43,7 +46,7 @@ npm install safe-claude
 ### Basic Commands
 
 ```bash
-# Run Claude Code in current directory
+# Run Claude Code in current directory, drop into docker shell
 ./safe-claude
 
 # Show help
@@ -61,10 +64,11 @@ npm install safe-claude
 
 ### First Time Setup
 
-1. Run `./safe-claude` in your project directory
-2. The script will build the base Docker image (one-time setup)
-3. Claude Code will prompt for permissions and authentication
-4. After configuring, run `./safe-claude --save` to persist your settings
+1. Run `safe-claude` in your project directoy.
+2. The script will build the base Docker image (one-time setup) and drop you into a `zsh` session
+3. Run `claude`, which is set up to `--dangerously-skip-permissions` and will prompt for permissions and authentication
+4. After, run `safe-claude --save` from your computer to commit the base docker imape. 
+5. From now on, run safe-claude from any directory to setup an isolated docker container with a configured `claude`.
 
 ### Container Management
 
