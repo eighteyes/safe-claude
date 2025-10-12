@@ -58,37 +58,36 @@ npm install safe-claude
 # Remove ALL containers and images
 ./safe-claude --rm --all
 
-# Save configuration state
+# Save current container state to image
 ./safe-claude --save
 ```
 
 ### First Time Setup
 
-1. Run `safe-claude` in your project directoy.
-2. The script will build the base Docker image (one-time setup) and drop you into a `zsh` session
-3. Run `claude`, which is set up to `--dangerously-skip-permissions` and will prompt for permissions and authentication
-4. After, run `safe-claude --save` from your computer to commit the base docker imape. 
-5. From now on, run safe-claude from any directory to setup an isolated docker container with a configured `claude`.
+1. Run `safe-claude` in your project directory
+2. The script builds the Docker image (one-time setup) and drops you into a `zsh` session
+3. Run `claude` (pre-configured with `--dangerously-skip-permissions`) to authenticate
+4. Exit the container and run `./safe-claude --save` to commit your configured state to the image
+5. From now on, `safe-claude` will use your saved configuration in new project containers
 
 ### Container Management
 
 #### Container Naming
 - Containers are named: `claude-dev-{directory-name}`
-- Each project directory gets its own container
-- Containers persist between sessions
+- Each project directory gets its own isolated container
+- Containers persist between sessions (auto-start/stop)
 
-#### Configuration
-- Ready state can be saved globally with `--save`
-- Creates a `claude:ready` image with permissions pre-approved and configured
-- No need to re-configure for each project, though tokens may expire
+#### Configuration Persistence
+- Use `--save` to commit current container state to the `claude-dev` image
+- Saved state includes installed packages, configuration, and authentication
+- All new containers start from your saved image state
 
 ## Mounted Directories
 
 The script automatically mounts:
-- **Current directory** → `/workspace/{directory-name}`
-- **~/.claude/commands** → Shared command definitions
+- **Current directory** → `/workspace/{directory-name}` (working directory)
+- **~/.claude/commands** → Shared slash command definitions
 - **~/.claude/agents** → Shared agent configurations
-- **~/.claude/settings.json** → Shared settings
 
 ## Environment Variables
 - `TERM` and `COLORTERM` - Preserved for proper terminal colors

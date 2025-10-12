@@ -4,7 +4,9 @@
       "Bash(chmod:*)",
       "Bash(docker ps:*)",
       "Bash(docker inspect:*)",
-      "Bash(lsof:*)"
+      "Bash(lsof:*)",
+      "Bash(npm:*)",
+      "Bash(docker logs:*)"
     ],
     "deny": [],
     "ask": []
