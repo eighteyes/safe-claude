@@ -3,7 +3,7 @@
 Run Claude Code in secure, isolated Docker containers with multi-project support.
 
 ### 🏠 Utilize Local Agents and Commands
-- Copies your `~/.claude/{agents, commands}` for use in every project.
+- Copies your `~/.claude/{agents, commands, CLAUDE.md}` for use in every project.
 
 ### 🔒 Security & Isolation
 - Each project runs in its own isolated Docker container
@@ -88,6 +88,7 @@ The script automatically mounts:
 - **Current directory** → `/workspace/{directory-name}` (working directory)
 - **~/.claude/commands** → Shared slash command definitions
 - **~/.claude/agents** → Shared agent configurations
+- **~/.claude/CLAUDE.md** → Global user instructions (read-only)
 
 ## Environment Variables
 - `TERM` and `COLORTERM` - Preserved for proper terminal colors

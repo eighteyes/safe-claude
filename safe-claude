@@ -354,7 +354,7 @@ fi
 # Build volume mounts - share specific .claude subdirectories but not .claude.json
 VOLUMES="-v $CURRENT_DIR:/workspace/$DIR_NAME"
 
-# Mount specific .claude subdirectories if they exist (excluding CLAUDE.md and settings.json)
+# Mount specific .claude subdirectories and CLAUDE.md if they exist (excluding settings.json)
 if [ -d "$HOME/.claude/commands" ]; then
   VOLUMES="$VOLUMES -v $HOME/.claude/commands:/home/node/.claude/commands"
 fi
@@ -363,6 +363,11 @@ if [ -d "$HOME/.claude/agents" ]; then
 fi
 if [ -d "$HOME/.claude/skills" ]; then
   VOLUMES="$VOLUMES -v $HOME/.claude/agents:/home/node/.claude/skills"
+fi
+
+# Mount CLAUDE.md if it exists
+if [ -f "$HOME/.claude/CLAUDE.md" ]; then
+  VOLUMES="$VOLUMES -v $HOME/.claude/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro"
 fi
 
 # Check for API key in environment
