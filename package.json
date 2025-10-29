@@ -1,6 +1,6 @@
 {
   "name": "safe-claude",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Run Claude Code in secure Docker containers with multi-project support",
   "bin": {
     "safe-claude": "bin/safe-claude.js"
